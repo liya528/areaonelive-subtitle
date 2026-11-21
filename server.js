@@ -10,28 +10,38 @@ const ok=req=>!ADMIN||new URL(req.url,'http://x').searchParams.get('key')?.trim(
 setInterval(()=>clients.forEach(c=>c.write(': ping\n\n')),20000); // keep SSE alive behind proxies
 const send=o=>{const s=`data: ${JSON.stringify(o)}\n\n`;clients.forEach(c=>c.write(s))};
 
-const T=4000; // never let a slow translator block the queue
+const T=5000; // never let a slow translator block the queue
+const bad=x=>typeof x!=='string'||!x.trim()||/MYMEMORY WARNING|QUERY LENGTH LIMIT|INVALID/i.test(x);
+async function viaCloud(text,sl,tl){ // official Google Cloud Translation
+  const r=await fetch('https://translation.googleapis.com/language/translate/v2?key='+KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text,source:sl,target:tl,format:'text'}),signal:AbortSignal.timeout(T)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||!j.data)throw new Error('google-cloud '+r.status+' '+(j.error&&j.error.message||''));
+  return j.data.translations[0].translatedText;
+}
 async function viaGoogleFree(text,sl,tl){
   const r=await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`,{signal:AbortSignal.timeout(T)});
   if(!r.ok)throw new Error('google-free '+r.status);
-  return (await r.json())[0].map(x=>x[0]).join('');
+  return (await r.json())[0].map(x=>x&&x[0]||'').join('');
 }
 async function viaMyMemory(text,sl,tl){ // free fallback, short texts only
   const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(-150))}&langpair=${sl}|${tl}`,{signal:AbortSignal.timeout(T)});
   if(!r.ok)throw new Error('mymemory '+r.status);
-  return (await r.json()).responseData.translatedText;
+  const j=await r.json();
+  if(+j.responseStatus!==200)throw new Error('mymemory '+j.responseStatus+' '+(j.responseDetails||''));
+  return j.responseData.translatedText;
 }
+let lastProv='-';
 async function translate(text,lang){
   const th=lang.startsWith('th'),sl=th?'th':'en',tl=th?'en':'th',k=sl+text;
   if(cache.has(k))return cache.get(k);
-  let out;
-  if(KEY){ // official Google Cloud Translation
-    const r=await fetch('https://translation.googleapis.com/language/translate/v2?key='+KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text,source:sl,target:tl,format:'text'}),signal:AbortSignal.timeout(T)});
-    out=(await r.json()).data.translations[0].translatedText;
-  }else{
-    try{out=await viaGoogleFree(text,sl,tl)}
-    catch(e){console.log('free translate failed:',e.message);out=await viaMyMemory(text,sl,tl)}
+  // try each provider in turn; a provider that errors OR returns junk falls through to the next
+  const chain=[...(KEY?[['google-cloud',viaCloud]]:[]),['google-free',viaGoogleFree],['mymemory',viaMyMemory]];
+  const errs=[];let out;
+  for(const [name,fn] of chain){
+    try{const r=await fn(text,sl,tl);if(bad(r))throw new Error('empty/invalid result');out=r;if(lastProv!==name){lastProv=name;console.log('translator now:',name)}break}
+    catch(e){errs.push(name+': '+e.message)}
   }
+  if(out===undefined){console.log('all translators failed ->',errs.join(' | '));throw new Error(errs.join(' | '))}
   if(cache.size>500)cache.clear();
   cache.set(k,out);return out;
 }
@@ -64,6 +74,12 @@ http.createServer(async(req,res)=>{
     Object.assign(settings,await body(req));
     try{fs.writeFileSync(SF,JSON.stringify(settings))}catch{}
     send({type:'settings',...settings});return res.end('ok');
+  }
+  if(u==='/diag'){ // open /diag?key=... to see which translator works from this server
+    if(!ok(req))return res.writeHead(401).end('key required');
+    res.setHeader('Content-Type','application/json; charset=utf-8');
+    try{return res.end(JSON.stringify({ok:true,provider:lastProv,hasGoogleKey:!!KEY,th2en:await translate('สวัสดีค่ะ ยินดีต้อนรับ'+Date.now()%1000,'th-TH')}))}
+    catch(e){return res.end(JSON.stringify({ok:false,error:e.message}))}
   }
   if(u==='/dgkey'){ // Deepgram key for the owner's browser; protected by ADMIN_KEY
     if(!ok(req))return res.writeHead(401).end();

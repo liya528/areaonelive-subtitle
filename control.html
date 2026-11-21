@@ -16,7 +16,7 @@ input[type=range]{width:100%}
 <label>ตัวจับเสียง
  <select id="eng"><option value="deepgram">Deepgram (ไม่ต้องใช้บัตร)</option><option value="azure">Azure Speech</option><option value="chrome">Chrome</option></select></label>
 <label>ภาษาที่พูด
- <select id="lang"><option value="th-TH">ไทย (แปลเป็นอังกฤษ)</option><option value="en-US">English (แปลเป็นไทย)</option></select></label>
+ <select id="lang"><option value="auto">ไทย + English อัตโนมัติ (Deepgram เท่านั้น)</option><option value="th-TH">ไทย (แปลเป็นอังกฤษ)</option><option value="en-US">English (แปลเป็นไทย)</option></select></label>
 <label>รูปแบบซับ
  <select id="mode"><option value="both">ไทย + อังกฤษ</option><option value="orig">ภาษาที่พูดอย่างเดียว</option><option value="trans">คำแปลอย่างเดียว</option></select></label>
 <label>คำเฉพาะ ชื่อคน/ชื่องาน คั่นด้วยคอมมา (Azure เท่านั้น)
@@ -43,7 +43,9 @@ keys.forEach(k=>$(k).oninput=()=>post('/settings',Object.fromEntries(keys.map(k=
 
 let rec,az,tok,dg,mr,ms,run=false,session=0;
 const on=()=>{run=true;$('go').textContent='หยุดฟัง'};
-function start(){({deepgram:startDeepgram,azure:startAzure,chrome:startChrome})[$('eng').value]()}
+function start(){
+  if($('lang').value==='auto'&&$('eng').value!=='deepgram')return st('โหมดอัตโนมัติใช้ได้กับ Deepgram เท่านั้น');
+  ({deepgram:startDeepgram,azure:startAzure,chrome:startChrome})[$('eng').value]()}
 function startChrome(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR)return st('Chrome นี้ไม่รองรับ ให้เลือก Azure แทน');
@@ -62,27 +64,42 @@ async function startDeepgram(){
   const k=await (await fetch('/dgkey'+K)).json();
   if(k.error)return st(k.error);
   try{ms=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return st('ใช้ไมค์ไม่ได้: '+e.name)}
-  const lang=$('lang').value.slice(0,2),sep=lang==='th'?'':' ';
-  dg=new WebSocket(`wss://api.deepgram.com/v1/listen?model=nova-3&language=${lang}&interim_results=true&punctuate=true&endpointing=300`,['token',k.key]);
-  session++;let id=0,base='';
-  dg.onopen=()=>{
-    st('กำลังฟัง (Deepgram)…');
-    mr=new MediaRecorder(ms,{mimeType:'audio/webm;codecs=opus'});
-    mr.ondataavailable=e=>{if(e.data.size&&dg&&dg.readyState===1)dg.send(e.data)};
-    mr.start(250);
-  };
-  dg.onmessage=e=>{
-    const m=JSON.parse(e.data),t=m.channel?.alternatives?.[0]?.transcript;
+  // "auto" = two parallel streams (th + en); per utterance we keep whichever model is more confident
+  const v=$('lang').value,langs=v==='auto'?['th','en']:[v.slice(0,2)],LC={th:'th-TH',en:'en-US'};
+  session++;let id=0,cutoff=0,cur=null,opened=0;
+  const S={},fresh=()=>{langs.forEach(l=>S[l]={base:'',text:'',conf:0,at:0})};fresh();
+  const onMsg=(l,m)=>{
+    const a=m.channel?.alternatives?.[0],t=a&&a.transcript;
     if(t===undefined)return;
-    const text=base+(base&&t?sep:'')+t;
-    if(!text){if(m.speech_final){base='';id++}return}
-    $('raw').textContent=text;
-    post('/caption',{seq:session*10000+id,text,final:!!m.speech_final,lang:$('lang').value});
-    if(m.is_final)base=text;
-    if(m.speech_final){base='';id++}
+    if(m.start+m.duration<=cutoff+0.02)return;      // belongs to an utterance already closed
+    const s=S[l];
+    s.text=s.base+(s.base&&t?(l==='th'?'':' '):'')+t;s.conf=t?(a.confidence||0):0;s.at=Date.now();
+    if(m.is_final)s.base=s.text;
+    const c=langs.filter(x=>S[x].text&&Date.now()-S[x].at<2500);
+    if(!c.length){if(m.speech_final)s.base='';return}
+    let best=c.reduce((p,x)=>S[x].conf>S[p].conf?x:p);
+    if(cur&&c.includes(cur)&&best!==cur&&S[best].conf<S[cur].conf+0.1)best=cur; // avoid flip-flopping
+    cur=best;
+    const fin=!!m.speech_final&&l===best;
+    $('raw').textContent='['+best.toUpperCase()+'] '+S[best].text;
+    post('/caption',{seq:session*10000+id,text:S[best].text,final:fin,lang:v==='auto'?LC[best]:v});
+    if(fin){cutoff=m.start+m.duration;id++;cur=null;fresh()}
+    else if(m.speech_final){s.base='';s.text=''}
   };
-  dg.onerror=()=>st('Deepgram เชื่อมต่อไม่ได้ (เช็คคีย์/เครดิต)');
-  dg.onclose=e=>{if(run&&e.code!==1000)st('Deepgram ตัดการเชื่อมต่อ ('+e.code+')')};
+  dg=langs.map(l=>{
+    const ws=new WebSocket(`wss://api.deepgram.com/v1/listen?model=nova-3&language=${l}&interim_results=true&punctuate=true&endpointing=300`,['token',k.key]);
+    ws.onopen=()=>{
+      if(++opened<langs.length)return;               // wait until every socket is open so all get the webm header
+      st('กำลังฟัง (Deepgram'+(langs.length>1?' ไทย+อังกฤษ':'')+')…');
+      mr=new MediaRecorder(ms,{mimeType:'audio/webm;codecs=opus'});
+      mr.ondataavailable=e=>{if(e.data.size)dg&&dg.forEach(w=>w.readyState===1&&w.send(e.data))};
+      mr.start(250);
+    };
+    ws.onmessage=e=>onMsg(l,JSON.parse(e.data));
+    ws.onerror=()=>st('Deepgram เชื่อมต่อไม่ได้ (เช็คคีย์/เครดิต)');
+    ws.onclose=e=>{if(run&&e.code!==1000)st('Deepgram ตัดการเชื่อมต่อ ('+e.code+')')};
+    return ws;
+  });
   on();
 }
 async function startAzure(){
@@ -105,7 +122,7 @@ async function startAzure(){
 function stop(){
   run=false;rec&&rec.stop();clearInterval(tok);
   try{mr&&mr.state!=='inactive'&&mr.stop()}catch{}
-  ms&&ms.getTracks().forEach(x=>x.stop());dg&&dg.close(1000);dg=mr=ms=null;
+  ms&&ms.getTracks().forEach(x=>x.stop());dg&&dg.forEach(w=>w.close(1000));dg=mr=ms=null;
   if(az){az.stopContinuousRecognitionAsync();az=null}
   $('go').textContent='เริ่มฟัง';st('หยุดแล้ว');
 }
