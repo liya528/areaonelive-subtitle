@@ -1,67 +1,54 @@
 <!doctype html>
-<html lang="th"><meta charset="utf-8"><title>Live Subtitle</title>
+<html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Subtitle</title>
+<script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@1.40.0/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle-min.js"></script>
 <style>
-*{box-sizing:border-box}
-body{margin:0;padding:24px;font:15px/1.5 system-ui,'Noto Sans Thai',sans-serif;background:#13161b;color:#e7ebf0}
-main{max-width:1060px;margin:auto;display:grid;grid-template-columns:1fr 340px;gap:28px}
-@media(max-width:860px){main{grid-template-columns:1fr}}
-h1{font-size:20px;margin:0 0 16px}
-#pv{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:linear-gradient(120deg,#e8b72c 0%,#e8b72c 35%,#1aa9b5 100%)}
-#fr{position:absolute;left:0;top:0;width:1920px;height:1080px;border:0;transform-origin:0 0}
-#raw{margin:12px 0 0;padding:10px 12px;background:#1b2027;border-radius:6px;min-height:44px;color:#9aa6b4}
-aside{display:grid;gap:14px;align-content:start}
-label{display:grid;gap:4px;font-size:13px;color:#9aa6b4}
-select,input[type=text]{width:100%;padding:8px;border-radius:6px;border:1px solid #2c3440;background:#1b2027;color:#e7ebf0;font:inherit}
+body{font:16px system-ui,'Noto Sans Thai',sans-serif;max-width:520px;margin:16px auto;padding:0 12px}
+label{display:block;margin:12px 0 2px}
+select,input[type=text],button{width:100%;padding:8px;font:inherit}
 input[type=range]{width:100%}
-button{padding:10px 14px;border-radius:6px;border:0;font:inherit;cursor:pointer;background:#2c3440;color:#e7ebf0}
-button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #1aa9b5;outline-offset:2px}
-#go{background:#1aa9b5;color:#06262a;font-weight:700;font-size:16px;padding:14px}
-#go.on{background:#e5484d;color:#fff}
-#st{font-size:13px;color:#9aa6b4;min-height:20px}
+#go{padding:14px;font-size:18px}
+#st,#raw{margin-top:10px;min-height:1.5em}
+#raw{background:#eee;color:#222;padding:8px}
 </style>
-<main>
- <section>
-  <h1>Live Subtitle</h1>
-  <div id="pv"><iframe id="fr" src="/overlay" title="ตัวอย่างซับ"></iframe></div>
-  <p id="raw">ข้อความที่ฟังได้จะขึ้นตรงนี้</p>
- </section>
- <aside>
-  <button id="go">เริ่มฟัง</button>
-  <div id="st"></div>
-  <label>ภาษาที่พูด
-   <select id="lang"><option value="th-TH">ไทย (แปลเป็นอังกฤษ)</option><option value="en-US">English (แปลเป็นไทย)</option></select></label>
-  <label>รูปแบบซับ
-   <select id="mode"><option value="both">ไทย + อังกฤษ</option><option value="orig">ภาษาที่พูดอย่างเดียว</option><option value="trans">คำแปลอย่างเดียว</option></select></label>
-  <label>ขนาดตัวอักษร <input type="range" id="font" min="24" max="110"></label>
-  <label>ระยะจากขอบล่าง <input type="range" id="bottom" min="0" max="400"></label>
-  <label>ตัวอักษรไทยต่อท่อน <input type="range" id="thChars" min="8" max="50"></label>
-  <label>ตัวอักษรอังกฤษต่อท่อน <input type="range" id="enChars" min="16" max="90"></label>
-  <label>ค้างหลังพูดจบ (วินาที) <input type="range" id="hold" min="1" max="8"></label>
-  <label>URL สำหรับ OBS (Browser Source 1920×1080)
-   <input type="text" id="url" readonly onclick="this.select()"></label>
-  <button id="test">ทดสอบซับ (ไม่ใช้ไมค์)</button>
- </aside>
-</main>
+<button id="go">เริ่มฟัง</button>
+<div id="st"></div><div id="raw"></div>
+<label>ตัวจับเสียง
+ <select id="eng"><option value="deepgram">Deepgram (ไม่ต้องใช้บัตร)</option><option value="azure">Azure Speech</option><option value="chrome">Chrome</option></select></label>
+<label>ภาษาที่พูด
+ <select id="lang"><option value="th-TH">ไทย (แปลเป็นอังกฤษ)</option><option value="en-US">English (แปลเป็นไทย)</option></select></label>
+<label>รูปแบบซับ
+ <select id="mode"><option value="both">ไทย + อังกฤษ</option><option value="orig">ภาษาที่พูดอย่างเดียว</option><option value="trans">คำแปลอย่างเดียว</option></select></label>
+<label>คำเฉพาะ ชื่อคน/ชื่องาน คั่นด้วยคอมมา (Azure เท่านั้น)
+ <input type="text" id="phr" placeholder="AREAFEST, ก๋วยเตี๋ยวเรือ"></label>
+<label>ขนาดตัวอักษร <input type="range" id="font" min="24" max="110"></label>
+<label>ระยะจากขอบล่าง <input type="range" id="bottom" min="0" max="400"></label>
+<label>URL สำหรับ OBS (Browser Source 1920×1080)
+ <input type="text" id="url" readonly onclick="this.select()"></label>
+<label><button id="test">ทดสอบซับ (ไม่ใช้ไมค์)</button></label>
 <script>
-const $=id=>document.getElementById(id),K=location.search,post=(u,b)=>fetch(u+K,{method:'POST',body:JSON.stringify(b)});
-const keys=['mode','font','bottom','thChars','enChars','hold'];
+const $=id=>document.getElementById(id),K=location.search,
+  post=(u,b)=>fetch(u+K,{method:'POST',body:JSON.stringify(b)}),st=s=>$('st').textContent=s;
 $('url').value=location.origin+'/overlay';
-const fit=()=>$('fr').style.transform=`scale(${$('pv').clientWidth/1920})`;fit();addEventListener('resize',fit);
+// remember choices between visits
+['eng','lang','phr'].forEach(k=>{if(localStorage[k])$(k).value=localStorage[k];$(k).addEventListener('input',()=>localStorage[k]=$(k).value)});
 
-let init=false;
+const keys=['mode','font','bottom'];let init=false;
 new EventSource('/events').onmessage=e=>{
   const m=JSON.parse(e.data);
   if(m.type==='settings'&&!init){init=true;keys.forEach(k=>$(k).value=m[k])}
+  if(m.type==='terr')st('แปลไม่ได้: '+m.msg);
 };
 keys.forEach(k=>$(k).oninput=()=>post('/settings',Object.fromEntries(keys.map(k=>[k,k==='mode'?$(k).value:+$(k).value]))));
 
-let rec,run=false,session=0;
-const st=s=>$('st').textContent=s;
-function start(){
+let rec,az,tok,dg,mr,ms,run=false,session=0;
+const on=()=>{run=true;$('go').textContent='หยุดฟัง'};
+function start(){({deepgram:startDeepgram,azure:startAzure,chrome:startChrome})[$('eng').value]()}
+function startChrome(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR)return st('ต้องเปิดหน้านี้ใน Google Chrome');
+  if(!SR)return st('Chrome นี้ไม่รองรับ ให้เลือก Azure แทน');
   rec=new SR();rec.lang=$('lang').value;rec.continuous=true;rec.interimResults=true;
-  rec.onstart=()=>{session++;st('กำลังฟัง…')};
+  rec.onstart=()=>{session++;st('กำลังฟัง (Chrome)…')};
   rec.onresult=e=>{
     const i=e.results.length-1,r=e.results[i],text=r[0].transcript.trim();
     $('raw').textContent=text;
@@ -69,11 +56,61 @@ function start(){
   };
   rec.onerror=e=>{st('ผิดพลาด: '+e.error);if(/not-allowed/.test(e.error))stop()};
   rec.onend=()=>{if(run)try{rec.start()}catch{}};
-  run=true;rec.start();$('go').textContent='หยุดฟัง';$('go').classList.add('on');
+  on();rec.start();
 }
-function stop(){run=false;rec&&rec.stop();$('go').textContent='เริ่มฟัง';$('go').classList.remove('on')}
+async function startDeepgram(){
+  const k=await (await fetch('/dgkey'+K)).json();
+  if(k.error)return st(k.error);
+  try{ms=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return st('ใช้ไมค์ไม่ได้: '+e.name)}
+  const lang=$('lang').value.slice(0,2),sep=lang==='th'?'':' ';
+  dg=new WebSocket(`wss://api.deepgram.com/v1/listen?model=nova-3&language=${lang}&interim_results=true&punctuate=true&endpointing=300`,['token',k.key]);
+  session++;let id=0,base='';
+  dg.onopen=()=>{
+    st('กำลังฟัง (Deepgram)…');
+    mr=new MediaRecorder(ms,{mimeType:'audio/webm;codecs=opus'});
+    mr.ondataavailable=e=>{if(e.data.size&&dg&&dg.readyState===1)dg.send(e.data)};
+    mr.start(250);
+  };
+  dg.onmessage=e=>{
+    const m=JSON.parse(e.data),t=m.channel?.alternatives?.[0]?.transcript;
+    if(t===undefined)return;
+    const text=base+(base&&t?sep:'')+t;
+    if(!text){if(m.speech_final){base='';id++}return}
+    $('raw').textContent=text;
+    post('/caption',{seq:session*10000+id,text,final:!!m.speech_final,lang:$('lang').value});
+    if(m.is_final)base=text;
+    if(m.speech_final){base='';id++}
+  };
+  dg.onerror=()=>st('Deepgram เชื่อมต่อไม่ได้ (เช็คคีย์/เครดิต)');
+  dg.onclose=e=>{if(run&&e.code!==1000)st('Deepgram ตัดการเชื่อมต่อ ('+e.code+')')};
+  on();
+}
+async function startAzure(){
+  const t=await (await fetch('/token'+K)).json();
+  if(t.error)return st(t.error);
+  const cfg=SpeechSDK.SpeechConfig.fromAuthorizationToken(t.token,t.region),lang=$('lang').value;
+  cfg.speechRecognitionLanguage=lang;
+  az=new SpeechSDK.SpeechRecognizer(cfg,SpeechSDK.AudioConfig.fromDefaultMicrophoneInput());
+  const pl=SpeechSDK.PhraseListGrammar.fromRecognizer(az);
+  $('phr').value.split(',').map(x=>x.trim()).filter(Boolean).forEach(p=>pl.addPhrase(p));
+  session++;let id=0;
+  const push=(text,final)=>{$('raw').textContent=text;post('/caption',{seq:session*10000+id,text,final,lang})};
+  az.recognizing=(s,e)=>push(e.result.text,false);
+  az.recognized=(s,e)=>{if(e.result.text)push(e.result.text,true);id++};
+  az.canceled=(s,e)=>st('Azure: '+(e.errorDetails||e.reason));
+  az.startContinuousRecognitionAsync(()=>st('กำลังฟัง (Azure)…'),e=>st('Azure: '+e));
+  tok=setInterval(async()=>{try{az.authorizationToken=(await (await fetch('/token'+K)).json()).token}catch{}},8*60000);
+  on();
+}
+function stop(){
+  run=false;rec&&rec.stop();clearInterval(tok);
+  try{mr&&mr.state!=='inactive'&&mr.stop()}catch{}
+  ms&&ms.getTracks().forEach(x=>x.stop());dg&&dg.close(1000);dg=mr=ms=null;
+  if(az){az.stopContinuousRecognitionAsync();az=null}
+  $('go').textContent='เริ่มฟัง';st('หยุดแล้ว');
+}
 $('go').onclick=()=>run?stop():start();
-$('lang').onchange=()=>{if(run){stop();setTimeout(start,300)}};
+$('lang').onchange=$('eng').onchange=()=>{if(run){stop();setTimeout(start,300)}};
 
 let tid=900000000;
 $('test').onclick=()=>{

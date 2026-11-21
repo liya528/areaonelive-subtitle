@@ -10,16 +10,27 @@ const ok=req=>!ADMIN||new URL(req.url,'http://x').searchParams.get('key')?.trim(
 setInterval(()=>clients.forEach(c=>c.write(': ping\n\n')),20000); // keep SSE alive behind proxies
 const send=o=>{const s=`data: ${JSON.stringify(o)}\n\n`;clients.forEach(c=>c.write(s))};
 
+const T=4000; // never let a slow translator block the queue
+async function viaGoogleFree(text,sl,tl){
+  const r=await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`,{signal:AbortSignal.timeout(T)});
+  if(!r.ok)throw new Error('google-free '+r.status);
+  return (await r.json())[0].map(x=>x[0]).join('');
+}
+async function viaMyMemory(text,sl,tl){ // free fallback, short texts only
+  const r=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(-150))}&langpair=${sl}|${tl}`,{signal:AbortSignal.timeout(T)});
+  if(!r.ok)throw new Error('mymemory '+r.status);
+  return (await r.json()).responseData.translatedText;
+}
 async function translate(text,lang){
   const th=lang.startsWith('th'),sl=th?'th':'en',tl=th?'en':'th',k=sl+text;
   if(cache.has(k))return cache.get(k);
   let out;
   if(KEY){ // official Google Cloud Translation
-    const r=await fetch('https://translation.googleapis.com/language/translate/v2?key='+KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text,source:sl,target:tl,format:'text'})});
+    const r=await fetch('https://translation.googleapis.com/language/translate/v2?key='+KEY,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text,source:sl,target:tl,format:'text'}),signal:AbortSignal.timeout(T)});
     out=(await r.json()).data.translations[0].translatedText;
-  }else{ // free unofficial endpoint: fine for testing, may be rate-limited
-    const r=await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`);
-    out=(await r.json())[0].map(x=>x[0]).join('');
+  }else{
+    try{out=await viaGoogleFree(text,sl,tl)}
+    catch(e){console.log('free translate failed:',e.message);out=await viaMyMemory(text,sl,tl)}
   }
   if(cache.size>500)cache.clear();
   cache.set(k,out);return out;
@@ -29,7 +40,7 @@ let busy=false,pending=null;
 async function pump(){
   if(busy||!pending)return;
   busy=true;const p=pending;pending=null;
-  try{send({type:'trans',seq:p.seq,text:await translate(p.text,p.lang)})}catch(e){console.log('translate error:',e.message)}
+  try{send({type:'trans',seq:p.seq,text:await translate(p.text,p.lang)})}catch(e){console.log('translate error:',e.message);send({type:'terr',msg:e.message})}
   busy=false;pump();
 }
 const body=req=>new Promise(r=>{let b='';req.on('data',d=>b+=d);req.on('end',()=>{try{r(JSON.parse(b))}catch{r({})}})});
@@ -53,6 +64,23 @@ http.createServer(async(req,res)=>{
     Object.assign(settings,await body(req));
     try{fs.writeFileSync(SF,JSON.stringify(settings))}catch{}
     send({type:'settings',...settings});return res.end('ok');
+  }
+  if(u==='/dgkey'){ // Deepgram key for the owner's browser; protected by ADMIN_KEY
+    if(!ok(req))return res.writeHead(401).end();
+    const key=(process.env.DEEPGRAM_API_KEY||'').trim();
+    res.setHeader('Content-Type','application/json');
+    return res.end(JSON.stringify(key?{key}:{error:'ยังไม่ได้ตั้ง DEEPGRAM_API_KEY'}));
+  }
+  if(u==='/token'){ // short-lived Azure Speech token, so the key never reaches the browser
+    if(!ok(req))return res.writeHead(401).end();
+    const key=(process.env.AZURE_SPEECH_KEY||'').trim(),region=(process.env.AZURE_SPEECH_REGION||'').trim();
+    res.setHeader('Content-Type','application/json');
+    if(!key||!region)return res.end(JSON.stringify({error:'ยังไม่ได้ตั้ง AZURE_SPEECH_KEY / AZURE_SPEECH_REGION'}));
+    try{
+      const r=await fetch(`https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,{method:'POST',headers:{'Ocp-Apim-Subscription-Key':key},signal:AbortSignal.timeout(5000)});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return res.end(JSON.stringify({token:await r.text(),region}));
+    }catch(e){return res.end(JSON.stringify({error:'ขอ token ไม่ได้: '+e.message}))}
   }
   const f=u==='/'?'control.html':u==='/overlay'?'overlay.html':null;
   if(!f)return res.writeHead(404).end();
