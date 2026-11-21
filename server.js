@@ -2,7 +2,7 @@
 const http=require('http'),fs=require('fs'),path=require('path');
 const PORT=process.env.PORT||3000, HOST=process.env.HOST||'0.0.0.0', KEY=(process.env.GOOGLE_API_KEY||'').trim(), ADMIN=(process.env.ADMIN_KEY||'').trim();
 const SF=path.join(__dirname,'settings.json');
-let settings={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3};
+let settings={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3,delay:1,lines:2,transMode:'final'};
 try{Object.assign(settings,JSON.parse(fs.readFileSync(SF)))}catch{}
 const clients=new Set(),cache=new Map();
 // if ADMIN_KEY is set, the control page and POST endpoints need ?key=...
@@ -45,11 +45,11 @@ async function translate(text,lang){
   if(cache.size>500)cache.clear();
   cache.set(k,out);return out;
 }
-// one translation at a time; only the newest pending text is kept
-let busy=false,pending=null;
+// one translation at a time. live mode keeps only the newest text; final mode queues every finished sentence
+let busy=false,queue=[];
 async function pump(){
-  if(busy||!pending)return;
-  busy=true;const p=pending;pending=null;
+  if(busy||!queue.length)return;
+  busy=true;const p=queue.shift();
   try{send({type:'trans',seq:p.seq,text:await translate(p.text,p.lang)})}catch(e){console.log('translate error:',e.message);send({type:'terr',msg:e.message})}
   busy=false;pump();
 }
@@ -66,7 +66,12 @@ http.createServer(async(req,res)=>{
     if(!ok(req))return res.writeHead(401).end('key required');
     const b=await body(req);
     send({type:'orig',seq:b.seq,text:b.text,final:!!b.final,lang:b.lang});
-    if(settings.mode!=='orig'&&b.text){pending={text:b.text,seq:b.seq,lang:b.lang||'th-TH'};pump()}
+    const live=settings.transMode==='live';
+    if(settings.mode!=='orig'&&b.text&&(live||b.final||b.commit)){ // final mode: translate only finished sentences/segments
+      const it={text:b.text,seq:b.seq,lang:b.lang||'th-TH'};
+      if(live)queue=[it];else{queue.push(it);if(queue.length>4)queue.shift()}
+      pump();
+    }
     return res.end('ok');
   }
   if(req.method==='POST'&&u==='/settings'){

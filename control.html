@@ -8,10 +8,12 @@ label{display:block;margin:12px 0 2px}
 select,input[type=text],button{width:100%;padding:8px;font:inherit}
 input[type=range]{width:100%}
 #go{padding:14px;font-size:18px}
+#sw{margin-top:8px;padding:10px}
 #st,#raw{margin-top:10px;min-height:1.5em}
 #raw{background:#eee;color:#222;padding:8px}
 </style>
 <button id="go">เริ่มฟัง</button>
+<button id="sw" title="ปุ่มลัด: L"></button>
 <div id="st"></div><div id="raw"></div>
 <label>ตัวจับเสียง
  <select id="eng"><option value="deepgram">Deepgram (ไม่ต้องใช้บัตร)</option><option value="azure">Azure Speech</option><option value="chrome">Chrome</option></select></label>
@@ -21,6 +23,12 @@ input[type=range]{width:100%}
  <select id="mode"><option value="both">ไทย + อังกฤษ</option><option value="orig">ภาษาที่พูดอย่างเดียว</option><option value="trans">คำแปลอย่างเดียว</option></select></label>
 <label>คำเฉพาะ ชื่อคน/ชื่องาน คั่นด้วยคอมมา (Azure เท่านั้น)
  <input type="text" id="phr" placeholder="AREAFEST, ก๋วยเตี๋ยวเรือ"></label>
+<label>การแปล
+ <select id="transMode"><option value="final">แปลเมื่อจบประโยค (แม่น อ่านง่าย)</option><option value="live">แปลสดทุกคำ (ไว แต่กระตุก)</option></select></label>
+<label>หน่วงซับให้ตรงกับภาพ (วินาที) <input type="range" id="delay" min="0" max="8" step="0.5"></label>
+<label>จำนวนบรรทัดต่อภาษา
+ <select id="lines"><option value="1">1 บรรทัด</option><option value="2">2 บรรทัด</option><option value="3">3 บรรทัด</option></select></label>
+<label>ค้างซับหลังพูดจบ (วินาที) <input type="range" id="hold" min="1" max="10" step="0.5"></label>
 <label>ขนาดตัวอักษร <input type="range" id="font" min="24" max="110"></label>
 <label>ระยะจากขอบล่าง <input type="range" id="bottom" min="0" max="400"></label>
 <label>URL สำหรับ OBS (Browser Source 1920×1080)
@@ -33,13 +41,13 @@ $('url').value=location.origin+'/overlay';
 // remember choices between visits
 ['eng','lang','phr'].forEach(k=>{if(localStorage[k])$(k).value=localStorage[k];$(k).addEventListener('input',()=>localStorage[k]=$(k).value)});
 
-const keys=['mode','font','bottom'];let init=false;
+const keys=['mode','font','bottom','transMode','delay','lines','hold'],strKeys=['mode','transMode','lines'];let init=false;
 new EventSource('/events').onmessage=e=>{
   const m=JSON.parse(e.data);
   if(m.type==='settings'&&!init){init=true;keys.forEach(k=>$(k).value=m[k])}
   if(m.type==='terr')st('แปลไม่ได้: '+m.msg);
 };
-keys.forEach(k=>$(k).oninput=()=>post('/settings',Object.fromEntries(keys.map(k=>[k,k==='mode'?$(k).value:+$(k).value]))));
+keys.forEach(k=>$(k).oninput=()=>post('/settings',Object.fromEntries(keys.map(k=>[k,strKeys.includes(k)?(k==='lines'?+$(k).value:$(k).value):+$(k).value]))));
 
 let rec,az,tok,dg,mr,ms,run=false,session=0;
 const on=()=>{run=true;$('go').textContent='หยุดฟัง'};
@@ -56,8 +64,8 @@ function startChrome(){
     $('raw').textContent=text;
     post('/caption',{seq:session*10000+i,text,final:r.isFinal,lang:rec.lang});
   };
-  rec.onerror=e=>{st('ผิดพลาด: '+e.error);if(/not-allowed/.test(e.error))stop()};
-  rec.onend=()=>{if(run)try{rec.start()}catch{}};
+  rec.onerror=e=>{if(e.error==='aborted')return;st('ผิดพลาด: '+e.error);if(/not-allowed/.test(e.error))stop()};
+  rec.onend=()=>{if(run){const v=$('lang').value;if(v!=='auto')rec.lang=v;try{rec.start()}catch{}}};
   on();rec.start();
 }
 async function startDeepgram(){
@@ -82,7 +90,7 @@ async function startDeepgram(){
     cur=best;
     const fin=!!m.speech_final&&l===best;
     $('raw').textContent='['+best.toUpperCase()+'] '+S[best].text;
-    post('/caption',{seq:session*10000+id,text:S[best].text,final:fin,lang:v==='auto'?LC[best]:v});
+    post('/caption',{seq:session*10000+id,text:S[best].text,final:fin,commit:!!m.is_final&&l===best,lang:v==='auto'?LC[best]:v});
     if(fin){cutoff=m.start+m.duration;id++;cur=null;fresh()}
     else if(m.speech_final){s.base='';s.text=''}
   };
@@ -128,6 +136,17 @@ function stop(){
 }
 $('go').onclick=()=>run?stop():start();
 $('lang').onchange=$('eng').onchange=()=>{if(run){stop();setTimeout(start,300)}};
+
+// quick language switch (works while listening); hotkey L
+function updateSw(){const v=$('lang').value;$('sw').textContent=v==='en-US'?'ตอนนี้: English → กดสลับเป็นไทย (L)':v==='th-TH'?'ตอนนี้: ไทย → กดสลับเป็น English (L)':'โหมดอัตโนมัติ → กดเพื่อล็อกเป็นไทย (L)'}
+function swap(){
+  const v=$('lang').value;$('lang').value=v==='th-TH'?'en-US':'th-TH';localStorage.lang=$('lang').value;updateSw();
+  if(!run)return;
+  if(rec&&$('eng').value==='chrome'){rec.lang=$('lang').value;try{rec.abort()}catch{}} // onend restarts it in the new language
+  else{stop();setTimeout(start,300)}
+}
+$('sw').onclick=swap;$('lang').addEventListener('change',updateSw);updateSw();
+addEventListener('keydown',e=>{if(e.code==='KeyL'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!/INPUT|SELECT|TEXTAREA/.test((e.target.tagName||'')))swap()});
 
 let tid=900000000;
 $('test').onclick=()=>{

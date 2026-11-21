@@ -11,7 +11,8 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden}
 <div id="cap"><div id="o"></div><div id="t"></div></div>
 <script>
 const cap=document.getElementById('cap'),o=document.getElementById('o'),t=document.getElementById('t');
-let S={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3},L='th-TH',seq=null,orig='',trans='',hideT;
+let S={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3,delay:1,lines:2,transMode:'final'},
+    L='th-TH',seq=null,orig='',trans='',p={seq:null,trans:''},hideT;
 
 // keep only the last few words that fit — Intl.Segmenter finds Thai word boundaries
 function tail(s,n,loc){
@@ -22,8 +23,10 @@ function tail(s,n,loc){
   return (out||s.slice(-n)).trim();
 }
 function render(){
-  const ol=L.slice(0,2),tl=ol==='th'?'en':'th',n=l=>l==='th'?S.thChars:S.enChars;
-  const a=tail(orig,n(ol),ol),b=tail(trans,n(tl),tl);
+  const ol=L.slice(0,2),tl=ol==='th'?'en':'th',ln=Math.max(1,S.lines||1),n=l=>(l==='th'?S.thChars:S.enChars)*ln;
+  // translation-only: keep the previous sentence's translation on screen until the new one arrives
+  const tr=trans||(S.mode==='trans'?p.trans:'');
+  const a=tail(orig,n(ol),ol),b=tail(tr,n(tl),tl);
   o.textContent=S.mode==='trans'?b:a;
   t.textContent=S.mode==='both'?b:'';
   cap.style.fontSize=S.font+'px';cap.style.bottom=S.bottom+'px';
@@ -32,11 +35,17 @@ function show(){
   cap.classList.add('on');clearTimeout(hideT);
   hideT=setTimeout(()=>cap.classList.remove('on'),S.hold*1000);
 }
+function handle(m){
+  if(m.type==='orig'){if(m.seq!==seq){p={seq,trans};seq=m.seq;trans=''}orig=m.text||'';if(m.lang)L=m.lang}
+  else if(m.type==='trans'){ // a translation may land just after the next sentence has started
+    if(m.seq===seq)trans=m.text;else if(m.seq===p.seq)p.trans=m.text;else return}
+  else return;
+  render();show();
+}
 new EventSource('/events').onmessage=e=>{
   const m=JSON.parse(e.data);
-  if(m.type==='settings'){S=m;render();return}
-  if(m.type==='orig'){if(m.seq!==seq){seq=m.seq;trans=''}orig=m.text||'';if(m.lang)L=m.lang}
-  else if(m.type==='trans'){if(m.seq!==seq)return;trans=m.text}
-  render();show();
+  if(m.type==='settings'){S=Object.assign(S,m);render();return}
+  // optional delay so the subtitles line up with a delayed video feed (same delay for all, so order is kept)
+  setTimeout(()=>handle(m),(S.delay||0)*1000);
 };
 </script>
