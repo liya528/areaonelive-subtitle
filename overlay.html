@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@500;700&family=Noto+Sans+Thai:wght@500;700&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden}
+#cap{position:absolute;left:5%;right:5%;text-align:center;color:#fff;font-family:Roboto,'Noto Sans Thai',sans-serif;font-weight:700;line-height:1.3;opacity:0;transition:opacity .15s;
+  text-shadow:0 0 3px #000,0 0 7px rgba(0,0,0,.85),0 2px 4px #000}
+#cap.on{opacity:1}
+#t{font-size:.78em;font-weight:500}
+</style>
+<div id="cap"><div id="o"></div><div id="t"></div></div>
+<script>
+const cap=document.getElementById('cap'),o=document.getElementById('o'),t=document.getElementById('t');
+let S={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3},L='th-TH',seq=null,orig='',trans='',hideT;
+
+// keep only the last few words that fit — Intl.Segmenter finds Thai word boundaries
+function tail(s,n,loc){
+  if(s.length<=n)return s;
+  const w=[...new Intl.Segmenter(loc,{granularity:'word'}).segment(s)].map(x=>x.segment);
+  let out='';
+  for(let i=w.length-1;i>=0;i--){if((w[i]+out).length>n)break;out=w[i]+out}
+  return (out||s.slice(-n)).trim();
+}
+function render(){
+  const ol=L.slice(0,2),tl=ol==='th'?'en':'th',n=l=>l==='th'?S.thChars:S.enChars;
+  const a=tail(orig,n(ol),ol),b=tail(trans,n(tl),tl);
+  o.textContent=S.mode==='trans'?b:a;
+  t.textContent=S.mode==='both'?b:'';
+  cap.style.fontSize=S.font+'px';cap.style.bottom=S.bottom+'px';
+}
+function show(){
+  cap.classList.add('on');clearTimeout(hideT);
+  hideT=setTimeout(()=>cap.classList.remove('on'),S.hold*1000);
+}
+new EventSource('/events').onmessage=e=>{
+  const m=JSON.parse(e.data);
+  if(m.type==='settings'){S=m;render();return}
+  if(m.type==='orig'){if(m.seq!==seq){seq=m.seq;trans=''}orig=m.text||'';if(m.lang)L=m.lang}
+  else if(m.type==='trans'){if(m.seq!==seq)return;trans=m.text}
+  render();show();
+};
+</script>

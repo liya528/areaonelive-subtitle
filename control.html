@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="th"><meta charset="utf-8"><title>Live Subtitle</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:24px;font:15px/1.5 system-ui,'Noto Sans Thai',sans-serif;background:#13161b;color:#e7ebf0}
+main{max-width:1060px;margin:auto;display:grid;grid-template-columns:1fr 340px;gap:28px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+h1{font-size:20px;margin:0 0 16px}
+#pv{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:linear-gradient(120deg,#e8b72c 0%,#e8b72c 35%,#1aa9b5 100%)}
+#fr{position:absolute;left:0;top:0;width:1920px;height:1080px;border:0;transform-origin:0 0}
+#raw{margin:12px 0 0;padding:10px 12px;background:#1b2027;border-radius:6px;min-height:44px;color:#9aa6b4}
+aside{display:grid;gap:14px;align-content:start}
+label{display:grid;gap:4px;font-size:13px;color:#9aa6b4}
+select,input[type=text]{width:100%;padding:8px;border-radius:6px;border:1px solid #2c3440;background:#1b2027;color:#e7ebf0;font:inherit}
+input[type=range]{width:100%}
+button{padding:10px 14px;border-radius:6px;border:0;font:inherit;cursor:pointer;background:#2c3440;color:#e7ebf0}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #1aa9b5;outline-offset:2px}
+#go{background:#1aa9b5;color:#06262a;font-weight:700;font-size:16px;padding:14px}
+#go.on{background:#e5484d;color:#fff}
+#st{font-size:13px;color:#9aa6b4;min-height:20px}
+</style>
+<main>
+ <section>
+  <h1>Live Subtitle</h1>
+  <div id="pv"><iframe id="fr" src="/overlay" title="ตัวอย่างซับ"></iframe></div>
+  <p id="raw">ข้อความที่ฟังได้จะขึ้นตรงนี้</p>
+ </section>
+ <aside>
+  <button id="go">เริ่มฟัง</button>
+  <div id="st"></div>
+  <label>ภาษาที่พูด
+   <select id="lang"><option value="th-TH">ไทย (แปลเป็นอังกฤษ)</option><option value="en-US">English (แปลเป็นไทย)</option></select></label>
+  <label>รูปแบบซับ
+   <select id="mode"><option value="both">ไทย + อังกฤษ</option><option value="orig">ภาษาที่พูดอย่างเดียว</option><option value="trans">คำแปลอย่างเดียว</option></select></label>
+  <label>ขนาดตัวอักษร <input type="range" id="font" min="24" max="110"></label>
+  <label>ระยะจากขอบล่าง <input type="range" id="bottom" min="0" max="400"></label>
+  <label>ตัวอักษรไทยต่อท่อน <input type="range" id="thChars" min="8" max="50"></label>
+  <label>ตัวอักษรอังกฤษต่อท่อน <input type="range" id="enChars" min="16" max="90"></label>
+  <label>ค้างหลังพูดจบ (วินาที) <input type="range" id="hold" min="1" max="8"></label>
+  <label>URL สำหรับ OBS (Browser Source 1920×1080)
+   <input type="text" id="url" readonly onclick="this.select()"></label>
+  <button id="test">ทดสอบซับ (ไม่ใช้ไมค์)</button>
+ </aside>
+</main>
+<script>
+const $=id=>document.getElementById(id),K=location.search,post=(u,b)=>fetch(u+K,{method:'POST',body:JSON.stringify(b)});
+const keys=['mode','font','bottom','thChars','enChars','hold'];
+$('url').value=location.origin+'/overlay';
+const fit=()=>$('fr').style.transform=`scale(${$('pv').clientWidth/1920})`;fit();addEventListener('resize',fit);
+
+let init=false;
+new EventSource('/events').onmessage=e=>{
+  const m=JSON.parse(e.data);
+  if(m.type==='settings'&&!init){init=true;keys.forEach(k=>$(k).value=m[k])}
+};
+keys.forEach(k=>$(k).oninput=()=>post('/settings',Object.fromEntries(keys.map(k=>[k,k==='mode'?$(k).value:+$(k).value]))));
+
+let rec,run=false,session=0;
+const st=s=>$('st').textContent=s;
+function start(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR)return st('ต้องเปิดหน้านี้ใน Google Chrome');
+  rec=new SR();rec.lang=$('lang').value;rec.continuous=true;rec.interimResults=true;
+  rec.onstart=()=>{session++;st('กำลังฟัง…')};
+  rec.onresult=e=>{
+    const i=e.results.length-1,r=e.results[i],text=r[0].transcript.trim();
+    $('raw').textContent=text;
+    post('/caption',{seq:session*10000+i,text,final:r.isFinal,lang:rec.lang});
+  };
+  rec.onerror=e=>{st('ผิดพลาด: '+e.error);if(/not-allowed/.test(e.error))stop()};
+  rec.onend=()=>{if(run)try{rec.start()}catch{}};
+  run=true;rec.start();$('go').textContent='หยุดฟัง';$('go').classList.add('on');
+}
+function stop(){run=false;rec&&rec.stop();$('go').textContent='เริ่มฟัง';$('go').classList.remove('on')}
+$('go').onclick=()=>run?stop():start();
+$('lang').onchange=()=>{if(run){stop();setTimeout(start,300)}};
+
+let tid=900000000;
+$('test').onclick=()=>{
+  const id=++tid*10,p=['สวัสดีค่ะ','สวัสดีค่ะ ยินดีต้อนรับ','สวัสดีค่ะ ยินดีต้อนรับทุกคนสู่งานของเรา'];
+  p.forEach((text,i)=>setTimeout(()=>post('/caption',{seq:id,text,final:i==2,lang:'th-TH'}),i*700));
+};
+</script>
+</html>
