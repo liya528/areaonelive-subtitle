@@ -1,12 +1,12 @@
 // Live Subtitle server — no dependencies, needs Node 18+
 const http=require('http'),fs=require('fs'),path=require('path');
-const PORT=process.env.PORT||3000, HOST=process.env.HOST||'0.0.0.0', KEY=process.env.GOOGLE_API_KEY, ADMIN=process.env.ADMIN_KEY;
+const PORT=process.env.PORT||3000, HOST=process.env.HOST||'0.0.0.0', KEY=(process.env.GOOGLE_API_KEY||'').trim(), ADMIN=(process.env.ADMIN_KEY||'').trim();
 const SF=path.join(__dirname,'settings.json');
 let settings={mode:'both',font:54,bottom:90,thChars:26,enChars:46,hold:3};
 try{Object.assign(settings,JSON.parse(fs.readFileSync(SF)))}catch{}
 const clients=new Set(),cache=new Map();
 // if ADMIN_KEY is set, the control page and POST endpoints need ?key=...
-const ok=req=>!ADMIN||new URL(req.url,'http://x').searchParams.get('key')===ADMIN;
+const ok=req=>!ADMIN||new URL(req.url,'http://x').searchParams.get('key')?.trim()===ADMIN;
 setInterval(()=>clients.forEach(c=>c.write(': ping\n\n')),20000); // keep SSE alive behind proxies
 const send=o=>{const s=`data: ${JSON.stringify(o)}\n\n`;clients.forEach(c=>c.write(s))};
 
@@ -56,7 +56,7 @@ http.createServer(async(req,res)=>{
   }
   const f=u==='/'?'control.html':u==='/overlay'?'overlay.html':null;
   if(!f)return res.writeHead(404).end();
-  if(f==='control.html'&&!ok(req))return res.writeHead(401).end('เปิดด้วย /?key=รหัสที่ตั้งใน ADMIN_KEY');
+  if(f==='control.html'&&!ok(req))return res.writeHead(401,{'Content-Type':'text/plain; charset=utf-8'}).end('รหัสไม่ตรง: เปิดด้วย /?key=รหัสที่ตั้งใน ADMIN_KEY');
   res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
   res.end(fs.readFileSync(path.join(__dirname,f)));
 }).listen(PORT,HOST,()=>console.log(`Control:  http://localhost:${PORT}/\nOverlay:  http://localhost:${PORT}/overlay  (ใส่ใน OBS Browser Source)`));
